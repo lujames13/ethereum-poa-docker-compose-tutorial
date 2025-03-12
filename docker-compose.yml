@@ -1,0 +1,43 @@
+version: '3'
+
+services:
+  node1:
+    container_name: ethereum-node1
+    image: ethereum/client-go:v1.13.14
+    volumes:
+      - ./node1:/root/.ethereum
+      - ./node1_password.txt:/password.txt
+      - ./genesis.json:/genesis.json
+    ports:
+      - "30306:30306"
+      - "30306:30306/udp"
+      - "8545:8545"
+    command: --datadir /root/.ethereum --port 30306 --networkid 123454321 --unlock 0xC0A55ae58fb8E26f7874E865eE143f033D445927 --password /password.txt --mine --miner.etherbase 0xC0A55ae58fb8E26f7874E865eE143f033D445927 --http --http.api eth,net,web3,personal,admin --http.addr 0.0.0.0 --http.port 8545 --http.corsdomain "*" --allow-insecure-unlock
+    networks:
+      ethnet:
+        ipv4_address: 172.20.0.2
+
+  node2:
+    container_name: ethereum-node2
+    image: ethereum/client-go:v1.13.14
+    depends_on:
+      - node1
+    volumes:
+      - ./node2:/root/.ethereum
+      - ./node2_password.txt:/password.txt
+      - ./genesis.json:/genesis.json
+    ports:
+      - "30307:30307"
+      - "30307:30307/udp"
+      - "8546:8546"
+    command: --datadir /root/.ethereum --port 30307 --networkid 123454321 --unlock 0x8c59707CcF4c996bDB6163A3a759baADf82dAe6A --password /password.txt --http --http.api eth,net,web3,personal,admin --http.addr 0.0.0.0 --http.port 8546 --http.corsdomain "*" --allow-insecure-unlock --bootnodes enode://67cbdce9f4d0a82cfb76053f948bb467d5acb96175a31330b99df0907e65a0468946f2ba2680a850e72a00ab92bbed53d417765b0e32e7afb3523453399edd45@172.20.0.2:30306
+    networks:
+      ethnet:
+        ipv4_address: 172.20.0.3
+
+networks:
+  ethnet:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16

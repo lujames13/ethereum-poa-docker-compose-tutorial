@@ -1,0 +1,7 @@
+web3.fromWei(eth.getBalance(eth.accounts[0]), "ether")
+eth.filter("latest").watch(function() {
+console.log("新區塊: ", eth.blockNumber);
+})
+eth.filter.uninstallAll();
+web3.eth.uninstallFilter("0x69b1cfd917f61250c96e114bd68cfcef");
+eth.uninstallFilter("0x69b1cfd917f61250c96e114bd68cfcef");
