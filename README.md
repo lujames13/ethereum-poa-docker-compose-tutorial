@@ -2,6 +2,287 @@
 
 本文檔提供使用Docker Compose和Geth 1.13版本搭建私有以太坊網絡的完整步驟，採用Clique PoA (Proof of Authority)共識機制。
 
+## 目錄
+
+1. [Clique共識機制介紹](#1-clique共識機制介紹)
+   - [1.1 什麼是Clique PoA](#11-什麼是clique-poa)
+   - [1.2 Clique運作機制](#12-clique運作機制)
+   - [1.3 投票與治理機制](#13-投票與治理機制)
+   - [1.4 程式化實現投票](#14-程式化實現投票)
+2. [使用Docker Compose實作私有以太坊網絡](#2-使用docker-compose實作私有以太坊網絡)
+   - [2.1 檔案架構](#21-檔案架構)
+   - [2.2 前置條件](#22-前置條件)
+   - [2.3 完整安裝步驟](#23-完整安裝步驟)
+   - [2.4 建立工作目錄](#4-建立工作目錄)
+   - [2.5 建立密碼文件](#5-建立密碼文件)
+   - [2.6 為節點創建帳戶](#6-為節點創建帳戶)
+   - [2.7 創建創世塊配置文件](#7-創建創世塊配置文件)
+   - [2.8 初始化節點](#8-初始化節點)
+   - [2.9 獲取節點1的enode ID](#9-獲取節點1的enode-id)
+   - [2.10 創建Docker Compose配置文件](#10-創建docker-compose配置文件)
+   - [2.11 啟動私有網絡](#11-啟動私有網絡)
+   - [2.12 連接到節點控制台](#12-連接到節點控制台)
+   - [2.13 驗證網絡連接](#13-驗證網絡連接)
+   - [2.14 檢查賬戶和餘額](#14-檢查賬戶和餘額)
+3. [測試網絡功能](#3-測試網絡功能)
+   - [3.1 測試交易功能](#31-測試交易功能)
+   - [3.2 監控區塊生成](#32-監控區塊生成)
+   - [3.3 停止網絡](#33-停止網絡)
+4. [故障排除](#4-故障排除)
+   - [4.1 節點不能相互連接](#41-節點不能相互連接)
+   - [4.2 無法挖礦](#42-無法挖礦)
+   - [4.3 常見錯誤：無效IP地址](#43-常見錯誤無效ip地址)
+5. [進階用途](#5-進階用途)
+   - [5.1 智能合約部署示例](#51-智能合約部署示例)
+6. [注意事項](#6-注意事項)
+7. [參考資源](#7-參考資源)
+
+## 1. Clique共識機制介紹
+
+### 1.1 什麼是Clique PoA
+
+Clique是以太坊生態系統中的一種權威證明(Proof of Authority, PoA)共識機制，專為私有和聯盟鏈設計。與工作量證明(PoW)不同，Clique不需要大量算力來挖礦，而是由預先選定的授權節點(稱為驗證者)輪流產生區塊。
+
+**主要特點：**
+
+- **高效能**：不需要解決複雜的數學問題，區塊生成速度快
+- **低資源消耗**：不需要專用挖礦硬體，大幅降低能源消耗
+- **可預測的區塊生成**：區塊生成間隔穩定（在本配置中為5秒）
+- **身份導向**：依靠驗證者的身份和聲譽保證網絡安全
+- **無分叉風險**：由於驗證者集合明確，實質上消除了大多數分叉情況
+
+**適用場景：**
+
+- 企業內部區塊鏈應用
+- 聯盟鏈網絡
+- 開發和測試環境
+- 需要高性能和確定性的應用場景
+
+### 1.2 Clique運作機制
+
+Clique共識機制通過以下方式運作：
+
+**區塊生成流程：**
+
+1. **驗證者輪流**：系統根據一個確定性算法決定每個區塊的出塊驗證者
+2. **簽名排序**：根據驗證者地址排序，按照偽隨機方式輪流產生區塊
+3. **區塊簽名**：當前輪次的驗證者對區塊頭進行簽名，放入`extradata`欄位
+4. **出塊間隔**：根據配置的`period`參數（本例中為5秒）定期出塊
+
+**關鍵參數解析：**
+
+在`genesis.json`中的Clique配置：
+
+```json
+"clique": {
+  "period": 5,    // 區塊產生間隔（秒）
+  "epoch": 30000  // 重新計算投票和驗證者的區塊數量
+}
+```
+
+- **period**：控制區塊生成的時間間隔，越短交易確認越快，但網絡負擔增加
+- **epoch**：定義一個完整治理周期的區塊數量，在每個epoch結束時：
+  - 系統處理並結算累積的所有投票
+  - 更新驗證者集合
+  - 清除未達成共識的投票
+  - 重新計算區塊簽名順序
+
+**創世塊中的驗證者設置：**
+
+在`genesis.json`的`extradata`欄位中包含初始驗證者：
+
+```
+"extradata": "0x0000...0000NODE1_ADDRESS_WITHOUT_0x0000...0000"
+```
+
+格式為：32字節前綴 + 驗證者地址（沒有0x前綴）+ 65字節後綴
+
+### 1.3 投票與治理機制
+
+Clique採用多數投票機制來動態調整驗證者集合：
+
+**投票規則：**
+
+- 每個現有驗證者有一票權重
+- 投票提案需要超過半數支持才能通過
+- 驗證者不能投票支持自己加入或移除
+- 投票在下一個epoch結束時生效
+- 一個epoch後未達成多數的投票會被丟棄
+
+**使用Geth控制台進行投票：**
+
+1. **提議添加新驗證者**：
+   ```javascript
+   clique.propose("0xNEW_VALIDATOR_ADDRESS", true)
+   ```
+
+2. **提議移除現有驗證者**：
+   ```javascript
+   clique.propose("0xEXISTING_VALIDATOR_ADDRESS", false)
+   ```
+
+3. **查看當前所有提案**：
+   ```javascript
+   clique.proposals()
+   ```
+   輸出示例：
+   ```
+   {
+     "0xabc123...": true,    // 提議添加此地址
+     "0xdef456...": false    // 提議移除此地址
+   }
+   ```
+
+4. **查看當前驗證者集合**：
+   ```javascript
+   clique.getSigners()
+   ```
+   輸出示例：
+   ```
+   ["0xabc123...", "0xdef456..."]
+   ```
+
+5. **查看特定區塊的驗證者**：
+   ```javascript
+   clique.getSnapshot()
+   ```
+   輸出示例：
+   ```
+   {
+     hash: "0x...",
+     number: 100,
+     recents: {...},
+     signers: {...},
+     votes: [...]
+   }
+   ```
+
+### 1.4 程式化實現投票
+
+除了通過Geth控制台，也可以使用程式化方法進行投票操作：
+
+**使用Web3.js進行投票**：
+
+```javascript
+// 引入Web3庫
+const Web3 = require('web3');
+const web3 = new Web3('http://localhost:8545');  // 連接到節點1的RPC
+
+// 準備發送者賬戶
+const sender = "0xYOUR_VALIDATOR_ADDRESS";
+const privateKey = "YOUR_PRIVATE_KEY_WITHOUT_0x";
+
+// 解鎖賬戶（或者使用簽名交易）
+async function proposeValidator(validatorAddress, add) {
+  try {
+    // 方法1：使用解鎖賬戶
+    await web3.eth.personal.unlockAccount(sender, "password", 600);
+    
+    // 發送RPC請求
+    return await web3.currentProvider.send({
+      method: 'clique_propose',
+      params: [validatorAddress, add],  // add為true表示添加，false表示移除
+      jsonrpc: "2.0",
+      id: Math.floor(Math.random() * 1000)
+    });
+  } catch (error) {
+    console.error("投票失敗:", error);
+  }
+}
+
+// 獲取當前提案
+async function getProposals() {
+  try {
+    return await web3.currentProvider.send({
+      method: 'clique_proposals',
+      params: [],
+      jsonrpc: "2.0",
+      id: Math.floor(Math.random() * 1000)
+    });
+  } catch (error) {
+    console.error("獲取提案失敗:", error);
+  }
+}
+
+// 獲取當前驗證者
+async function getSigners() {
+  try {
+    return await web3.currentProvider.send({
+      method: 'clique_getSigners',
+      params: [],
+      jsonrpc: "2.0",
+      id: Math.floor(Math.random() * 1000)
+    });
+  } catch (error) {
+    console.error("獲取驗證者失敗:", error);
+  }
+}
+
+// 使用範例
+async function main() {
+  // 提議添加新驗證者
+  const result = await proposeValidator("0xNEW_VALIDATOR_ADDRESS", true);
+  console.log("投票結果:", result);
+  
+  // 查看當前提案
+  const proposals = await getProposals();
+  console.log("當前提案:", proposals);
+  
+  // 查看當前驗證者
+  const signers = await getSigners();
+  console.log("當前驗證者:", signers);
+}
+
+main();
+```
+
+**監聽驗證者變更事件**：
+
+雖然Clique本身沒有專門的事件，但可以監控區塊頭的`extradata`欄位變化來追蹤驗證者集合變更：
+
+```javascript
+// 監控驗證者變更
+let knownSigners = new Set();
+
+// 訂閱新區塊
+web3.eth.subscribe('newBlockHeaders', async (error, blockHeader) => {
+  if (error) {
+    console.error("訂閱錯誤:", error);
+    return;
+  }
+  
+  // 在每個epoch邊界檢查（blockNumber % epoch === 0）
+  if (blockHeader.number % 30000 === 0) {
+    // 獲取最新驗證者集合
+    const signers = await getSigners();
+    const newSigners = new Set(signers.result);
+    
+    // 檢測新增的驗證者
+    for (const signer of newSigners) {
+      if (!knownSigners.has(signer)) {
+        console.log(`新增驗證者: ${signer}`);
+      }
+    }
+    
+    // 檢測移除的驗證者
+    for (const signer of knownSigners) {
+      if (!newSigners.has(signer)) {
+        console.log(`移除驗證者: ${signer}`);
+      }
+    }
+    
+    // 更新已知驗證者集合
+    knownSigners = newSigners;
+  }
+});
+```
+
+## 2. 使用Docker Compose實作私有以太坊網絡
+
+接下來的章節將詳細說明如何使用Docker Compose搭建基於Clique共識的私有以太坊網絡。
+
+[此處繼續您現有的內容...]
+
 ## 檔案架構
 
 ```
